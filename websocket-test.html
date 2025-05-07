@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Notification Tester (No API)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .notification-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .notification {
+            background-color: #f0f7ff;
+            border-left: 4px solid #3498db;
+            padding: 12px;
+            border-radius: 4px;
+        }
+        .email-notification {
+            background-color: #f0fff4;
+            border-left: 4px solid #2ecc71;
+        }
+        .connection-status {
+            padding: 8px 12px;
+            border-radius: 4px;
+            display: inline-block;
+            font-weight: bold;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Notification Tester</h1>
+    <p><em>This version tests only WebSocket functionality without API calls</em></p>
+    
+    <div class="container">
+        <div class="card">
+            <h2>WebSocket Connection</h2>
+            <div>
+                <label for="serverUrl">Server URL:</label>
+                <input type="text" id="serverUrl" value="http://localhost:3000" style="width: 250px;">
+            </div>
+            <div style="margin-top: 10px;">
+                <label for="userId">User ID:</label>
+                <input type="text" id="userId" placeholder="Enter user ID" style="width: 250px;">
+            </div>
+            <div style="margin-top: 15px;">
+                <button id="connectBtn">Connect</button>
+                <button id="disconnectBtn">Disconnect</button>
+                <span id="connectionStatus" class="connection-status disconnected">Disconnected</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Connection Info</h2>
+            <div id="connectionInfo">
+                <p>Not connected</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Notifications</h2>
+            <div class="notification-container" id="notificationContainer">
+                <div class="notification">
+                    <p>No notifications received yet. Connect to the WebSocket server to receive notifications.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+        let socketEvents = [];
+        
+        document.getElementById('connectBtn').addEventListener('click', connectWebSocket);
+        document.getElementById('disconnectBtn').addEventListener('click', disconnectWebSocket);
+        
+        function connectWebSocket() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const userId = document.getElementById('userId').value;
+            
+            if (!userId) {
+                alert('Please enter a User ID');
+                return;
+            }
+            
+            try {
+                // Disconnect existing connection if any
+                if (socket) {
+                    socket.disconnect();
+                }
+                
+                updateConnectionInfo('Attempting to connect...', 'info');
+                
+                // Connect to the server with the user ID as a query parameter
+                socket = io(serverUrl, {
+                    query: { userId },
+                    transports: ['websocket', 'polling'] // Try WebSocket first, then polling
+                });
+                
+                // Track all events for debugging
+                socketEvents = [];
+                
+                // Connection events
+                socket.on('connect', () => {
+                    updateConnectionStatus('Connected', true);
+                    addEvent('connect', 'Connected to server');
+                    addNotification({
+                        type: 'system',
+                        message: `Connected to WebSocket server with User ID: ${userId}`
+                    });
+                    
+                    // Display socket details
+                    updateConnectionInfo(`
+                        <p><strong>Socket ID:</strong> ${socket.id}</p>
+                        <p><strong>Transport:</strong> ${socket.io.engine.transport.name}</p>
+                        <p><strong>Connected:</strong> ${socket.connected}</p>
+                    `, 'success');
+                });
+                
+                socket.on('disconnect', (reason) => {
+                    updateConnectionStatus('Disconnected', false);
+                    addEvent('disconnect', `Disconnected: ${reason}`);
+                    addNotification({
+                        type: 'system',
+                        message: `Disconnected from WebSocket server. Reason: ${reason}`
+                    });
+                    updateConnectionInfo('Disconnected from server', 'error');
+                });
+                
+                socket.on('connect_error', (error) => {
+                    updateConnectionStatus(`Connection Error: ${error.message}`, false);
+                    addEvent('connect_error', error.message);
+                    console.error('Connection error:', error);
+                    updateConnectionInfo(`Connection error: ${error.message}`, 'error');
+                });
+                
+                // Listen for notifications
+                socket.on('notification', (notification) => {
+                    console.log('Received notification:', notification);
+                    addEvent('notification', JSON.stringify(notification));
+                    addNotification({
+                        type: 'general',
+                        data: notification
+                    });
+                });
+                
+                // Listen for email notifications
+                socket.on('emailNotification', (emailData) => {
+                    console.log('Received email notification:', emailData);
+                    addEvent('emailNotification', JSON.stringify(emailData));
+                    addNotification({
+                        type: 'email',
+                        data: emailData
+                    });
+                });
+                
+                // Listen for all events (for debugging)
+                socket.onAny((event, ...args) => {
+                    console.log(`Caught event: ${event}`, args);
+                    addEvent(event, JSON.stringify(args));
+                });
+                
+            } catch (error) {
+                console.error('Error connecting to WebSocket:', error);
+                updateConnectionStatus(`Error: ${error.message}`, false);
+                updateConnectionInfo(`Error creating connection: ${error.message}`, 'error');
+            }
+        }
+        
+        function disconnectWebSocket() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+            }
+        }
+        
+        function updateConnectionStatus(message, isConnected) {
+            const statusElement = document.getElementById('connectionStatus');
+            statusElement.textContent = message;
+            
+            if (isConnected) {
+                statusElement.classList.remove('disconnected');
+                statusElement.classList.add('connected');
+            } else {
+                statusElement.classList.remove('connected');
+                statusElement.classList.add('disconnected');
+            }
+        }
+        
+        function updateConnectionInfo(html, type) {
+            const infoElement = document.getElementById('connectionInfo');
+            infoElement.innerHTML = html;
+            
+            // Apply different styling based on type
+            infoElement.className = '';
+            if (type === 'error') {
+                infoElement.style.color = '#721c24';
+            } else if (type === 'success') {
+                infoElement.style.color = '#155724';
+            } else {
+                infoElement.style.color = '#0c5460';
+            }
+        }
+        
+        function addEvent(event, data) {
+            socketEvents.push({
+                time: new Date(),
+                event,
+                data
+            });
+        }
+        
+        function addNotification(notification) {
+            const container = document.getElementById('notificationContainer');
+            
+            // Remove the "no notifications" message if it exists
+            if (container.children.length === 1 && 
+                container.children[0].textContent.includes('No notifications received yet')) {
+                container.innerHTML = '';
+            }
+            
+            const notificationElement = document.createElement('div');
+            notificationElement.className = 'notification';
+            
+            if (notification.type === 'email') {
+                notificationElement.classList.add('email-notification');
+                
+                const emailData = notification.data;
+                notificationElement.innerHTML = `
+                    <strong>Email Notification</strong>
+                    <p><strong>From:</strong> ${emailData.from || 'Unknown'}</p>
+                    <p><strong>Subject:</strong> ${emailData.subject || 'No subject'}</p>
+                    <p><strong>Preview:</strong> ${emailData.preview || ''}</p>
+                    <p><strong>Time:</strong> ${new Date(emailData.timestamp || Date.now()).toLocaleString()}</p>
+                    <pre>${JSON.stringify(emailData, null, 2)}</pre>
+                `;
+            } else if (notification.type === 'general') {
+                const data = notification.data;
+                notificationElement.innerHTML = `
+                    <strong>General Notification</strong>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+            } else {
+                // System message
+                notificationElement.innerHTML = `
+                    <p>${notification.message}</p>
+                    <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+                `;
+            }
+            
+            container.prepend(notificationElement);
+        }
+    </script>
+</body>
+</html>
