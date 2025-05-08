@@ -1,9 +1,10 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebSocket Notification Tester (No API)</title>
+    <title>WebSocket Connection Test</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
     <style>
         body {
@@ -12,33 +13,12 @@
             margin: 0 auto;
             padding: 20px;
         }
-        .container {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
         .card {
             border: 1px solid #ddd;
             border-radius: 8px;
             padding: 16px;
+            margin-bottom: 20px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .notification-container {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            max-height: 400px;
-            overflow-y: auto;
-        }
-        .notification {
-            background-color: #f0f7ff;
-            border-left: 4px solid #3498db;
-            padding: 12px;
-            border-radius: 4px;
-        }
-        .email-notification {
-            background-color: #f0fff4;
-            border-left: 4px solid #2ecc71;
         }
         .connection-status {
             padding: 8px 12px;
@@ -54,6 +34,10 @@
             background-color: #f8d7da;
             color: #721c24;
         }
+        .warning {
+            background-color: #fff3cd;
+            color: #856404;
+        }
         button {
             padding: 8px 16px;
             background-color: #3498db;
@@ -61,240 +45,265 @@
             border: none;
             border-radius: 4px;
             cursor: pointer;
+            margin-right: 8px;
         }
         button:hover {
             background-color: #2980b9;
         }
-        pre {
+        #connectionInfo {
+            margin-top: 10px;
+        }
+        #logOutput {
             background-color: #f5f5f5;
             padding: 10px;
             border-radius: 4px;
-            overflow-x: auto;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-bottom: 1px solid #ddd;
+        }
+        .log-error {
+            color: #dc3545;
+        }
+        .log-success {
+            color: #28a745;
+        }
+        .log-info {
+            color: #17a2b8;
         }
     </style>
 </head>
 <body>
-    <h1>WebSocket Notification Tester</h1>
-    <p><em>This version tests only WebSocket functionality without API calls</em></p>
+    <h1>WebSocket Connection Test</h1>
+    <p>This simple tool will help diagnose WebSocket connection issues with your NestJS backend.</p>
     
-    <div class="container">
-        <div class="card">
-            <h2>WebSocket Connection</h2>
-            <div>
-                <label for="serverUrl">Server URL:</label>
-                <input type="text" id="serverUrl" value="http://localhost:3000" style="width: 250px;">
-            </div>
-            <div style="margin-top: 10px;">
-                <label for="userId">User ID:</label>
-                <input type="text" id="userId" placeholder="Enter user ID" style="width: 250px;">
-            </div>
-            <div style="margin-top: 15px;">
-                <button id="connectBtn">Connect</button>
-                <button id="disconnectBtn">Disconnect</button>
-                <span id="connectionStatus" class="connection-status disconnected">Disconnected</span>
-            </div>
+    <div class="card">
+        <h2>Connection Settings</h2>
+        <div>
+            <label for="serverUrl">Server URL:</label>
+            <input type="text" id="serverUrl" value="http://localhost:8000" style="width: 250px;">
         </div>
-
-        <div class="card">
-            <h2>Connection Info</h2>
-            <div id="connectionInfo">
-                <p>Not connected</p>
-            </div>
+        <div style="margin-top: 10px;">
+            <label for="userId">User ID:</label>
+            <input type="text" id="userId" value="test-user" style="width: 250px;">
         </div>
-
-        <div class="card">
-            <h2>Notifications</h2>
-            <div class="notification-container" id="notificationContainer">
-                <div class="notification">
-                    <p>No notifications received yet. Connect to the WebSocket server to receive notifications.</p>
-                </div>
-            </div>
+        <div style="margin-top: 15px;">
+            <button id="connectBtn">Connect</button>
+            <button id="disconnectBtn">Disconnect</button>
+            <button id="testNotificationBtn">Test Notification</button>
+            <span id="connectionStatus" class="connection-status disconnected">Disconnected</span>
         </div>
     </div>
 
+    <div class="card">
+        <h2>Connection Info</h2>
+        <div id="connectionInfo">
+            <p>Not connected</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Connection Log</h2>
+        <div id="logOutput"></div>
+    </div>
+
+  
+
     <script>
+        // DOM Elements
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const testNotificationBtn = document.getElementById('testNotificationBtn');
+        const serverUrlInput = document.getElementById('serverUrl');
+        const userIdInput = document.getElementById('userId');
+        const connectionStatusElem = document.getElementById('connectionStatus');
+        const connectionInfoElem = document.getElementById('connectionInfo');
+        const logOutputElem = document.getElementById('logOutput');
+        
+        // Global socket instance
         let socket = null;
-        let socketEvents = [];
         
-        document.getElementById('connectBtn').addEventListener('click', connectWebSocket);
-        document.getElementById('disconnectBtn').addEventListener('click', disconnectWebSocket);
+        // Log helper functions
+        function log(message, type = 'info') {
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry log-${type}`;
+            logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logOutputElem.prepend(logEntry);
+            console.log(`[${type}]`, message);
+        }
         
-        function connectWebSocket() {
-            const serverUrl = document.getElementById('serverUrl').value;
-            const userId = document.getElementById('userId').value;
+        // Update connection status UI
+        function updateConnectionStatus(message, isConnected) {
+            connectionStatusElem.textContent = message;
+            if (isConnected === true) {
+                connectionStatusElem.className = 'connection-status connected';
+            } else if (isConnected === false) {
+                connectionStatusElem.className = 'connection-status disconnected';
+            } else {
+                connectionStatusElem.className = 'connection-status warning';
+            }
+        }
+        
+        // Update connection info UI
+        function updateConnectionInfo(html) {
+            connectionInfoElem.innerHTML = html;
+        }
+        
+        // Connect to WebSocket server
+        async function connectWebSocket() {
+            const serverUrl = serverUrlInput.value;
+            const userId = userIdInput.value;
             
             if (!userId) {
                 alert('Please enter a User ID');
                 return;
             }
             
+            // Disconnect existing connection if any
+            if (socket) {
+                disconnectWebSocket();
+            }
+            
+            updateConnectionStatus('Connecting...', null);
+            log(`Attempting to connect to ${serverUrl} with userId: ${userId}`);
+            
             try {
-                // Disconnect existing connection if any
-                if (socket) {
-                    socket.disconnect();
-                }
-                
-                updateConnectionInfo('Attempting to connect...', 'info');
-                
-                // Connect to the server with the user ID as a query parameter
-                socket = io(serverUrl, {
+                // Create new connection options with more robust error handling
+                const options = {
                     query: { userId },
+                    reconnectionAttempts: 5,
+                    reconnectionDelay: 1000,
+                    timeout: 10000,
                     transports: ['websocket', 'polling'] // Try WebSocket first, then polling
-                });
+                };
                 
-                // Track all events for debugging
-                socketEvents = [];
+                log(`Connection options: ${JSON.stringify(options)}`, 'info');
+                
+                // Create Socket.IO instance
+                socket = io(serverUrl, options);
                 
                 // Connection events
                 socket.on('connect', () => {
                     updateConnectionStatus('Connected', true);
-                    addEvent('connect', 'Connected to server');
-                    addNotification({
-                        type: 'system',
-                        message: `Connected to WebSocket server with User ID: ${userId}`
-                    });
+                    log('Connected to WebSocket server!', 'success');
                     
                     // Display socket details
                     updateConnectionInfo(`
                         <p><strong>Socket ID:</strong> ${socket.id}</p>
                         <p><strong>Transport:</strong> ${socket.io.engine.transport.name}</p>
                         <p><strong>Connected:</strong> ${socket.connected}</p>
-                    `, 'success');
+                    `);
+                    
+                    // Try an immediate ping (if your server has this event)
+                    try {
+                        socket.emit('ping', { timestamp: new Date() });
+                        log('Sent ping to server', 'info');
+                    } catch (e) {
+                        log(`Error sending ping: ${e.message}`, 'error');
+                    }
                 });
                 
                 socket.on('disconnect', (reason) => {
-                    updateConnectionStatus('Disconnected', false);
-                    addEvent('disconnect', `Disconnected: ${reason}`);
-                    addNotification({
-                        type: 'system',
-                        message: `Disconnected from WebSocket server. Reason: ${reason}`
-                    });
-                    updateConnectionInfo('Disconnected from server', 'error');
+                    updateConnectionStatus(`Disconnected: ${reason}`, false);
+                    log(`Disconnected from server. Reason: ${reason}`, 'error');
+                    updateConnectionInfo('<p>Disconnected from server</p>');
                 });
                 
                 socket.on('connect_error', (error) => {
-                    updateConnectionStatus(`Connection Error: ${error.message}`, false);
-                    addEvent('connect_error', error.message);
-                    console.error('Connection error:', error);
-                    updateConnectionInfo(`Connection error: ${error.message}`, 'error');
+                    updateConnectionStatus(`Connection Error`, false);
+                    log(`Connection error: ${error.message}`, 'error');
+                    
+                    // Detailed error info
+                    updateConnectionInfo(`
+                        <p><strong>Error:</strong> ${error.message}</p>
+                        <p><strong>Transport attempted:</strong> ${socket.io.engine && socket.io.engine.transport ? socket.io.engine.transport.name : 'unknown'}</p>
+                        <p>Check your server configuration and network connection.</p>
+                    `);
                 });
                 
-                // Listen for notifications
-                socket.on('notification', (notification) => {
-                    console.log('Received notification:', notification);
-                    addEvent('notification', JSON.stringify(notification));
-                    addNotification({
-                        type: 'general',
-                        data: notification
-                    });
+                socket.on('error', (error) => {
+                    log(`Socket error: ${error}`, 'error');
                 });
                 
-                // Listen for email notifications
-                socket.on('emailNotification', (emailData) => {
-                    console.log('Received email notification:', emailData);
-                    addEvent('emailNotification', JSON.stringify(emailData));
-                    addNotification({
-                        type: 'email',
-                        data: emailData
-                    });
+                socket.on('reconnect_attempt', (attemptNumber) => {
+                    log(`Attempting to reconnect: attempt ${attemptNumber}`, 'info');
                 });
                 
-                // Listen for all events (for debugging)
+                socket.on('reconnect_error', (error) => {
+                    log(`Reconnection error: ${error.message}`, 'error');
+                });
+                
+                socket.on('reconnect_failed', () => {
+                    log('Failed to reconnect after multiple attempts', 'error');
+                });
+                
+                // Listen for custom events from your server
+                socket.on('notification', (data) => {
+                    log(`Received notification: ${JSON.stringify(data)}`, 'success');
+                });
+                
+                socket.on('emailNotification', (data) => {
+                    log(`Received email notification: ${JSON.stringify(data)}`, 'success');
+                });
+                
+                // Listen for any event for debugging
                 socket.onAny((event, ...args) => {
-                    console.log(`Caught event: ${event}`, args);
-                    addEvent(event, JSON.stringify(args));
+                    log(`Received event '${event}': ${JSON.stringify(args)}`, 'info');
                 });
                 
             } catch (error) {
-                console.error('Error connecting to WebSocket:', error);
                 updateConnectionStatus(`Error: ${error.message}`, false);
-                updateConnectionInfo(`Error creating connection: ${error.message}`, 'error');
+                log(`Error creating socket connection: ${error.message}`, 'error');
+                updateConnectionInfo(`<p>Error creating connection: ${error.message}</p>`);
+                console.error('Socket creation error:', error);
             }
         }
         
+        // Disconnect from WebSocket server
         function disconnectWebSocket() {
             if (socket) {
+                log('Manually disconnecting from server...', 'info');
                 socket.disconnect();
                 socket = null;
-            }
-        }
-        
-        function updateConnectionStatus(message, isConnected) {
-            const statusElement = document.getElementById('connectionStatus');
-            statusElement.textContent = message;
-            
-            if (isConnected) {
-                statusElement.classList.remove('disconnected');
-                statusElement.classList.add('connected');
+                updateConnectionStatus('Disconnected', false);
+                updateConnectionInfo('<p>Not connected</p>');
             } else {
-                statusElement.classList.remove('connected');
-                statusElement.classList.add('disconnected');
+                log('No active connection to disconnect', 'info');
             }
         }
         
-        function updateConnectionInfo(html, type) {
-            const infoElement = document.getElementById('connectionInfo');
-            infoElement.innerHTML = html;
-            
-            // Apply different styling based on type
-            infoElement.className = '';
-            if (type === 'error') {
-                infoElement.style.color = '#721c24';
-            } else if (type === 'success') {
-                infoElement.style.color = '#155724';
-            } else {
-                infoElement.style.color = '#0c5460';
-            }
-        }
-        
-        function addEvent(event, data) {
-            socketEvents.push({
-                time: new Date(),
-                event,
-                data
-            });
-        }
-        
-        function addNotification(notification) {
-            const container = document.getElementById('notificationContainer');
-            
-            // Remove the "no notifications" message if it exists
-            if (container.children.length === 1 && 
-                container.children[0].textContent.includes('No notifications received yet')) {
-                container.innerHTML = '';
+        // Test notification
+        function testNotification() {
+            if (!socket || !socket.connected) {
+                alert('Not connected to WebSocket server');
+                return;
             }
             
-            const notificationElement = document.createElement('div');
-            notificationElement.className = 'notification';
-            
-            if (notification.type === 'email') {
-                notificationElement.classList.add('email-notification');
+            try {
+                // Create a test notification
+                const testData = {
+                    message: 'This is a test notification',
+                    timestamp: new Date(),
+                    userId: userIdInput.value
+                };
                 
-                const emailData = notification.data;
-                notificationElement.innerHTML = `
-                    <strong>Email Notification</strong>
-                    <p><strong>From:</strong> ${emailData.from || 'Unknown'}</p>
-                    <p><strong>Subject:</strong> ${emailData.subject || 'No subject'}</p>
-                    <p><strong>Preview:</strong> ${emailData.preview || ''}</p>
-                    <p><strong>Time:</strong> ${new Date(emailData.timestamp || Date.now()).toLocaleString()}</p>
-                    <pre>${JSON.stringify(emailData, null, 2)}</pre>
-                `;
-            } else if (notification.type === 'general') {
-                const data = notification.data;
-                notificationElement.innerHTML = `
-                    <strong>General Notification</strong>
-                    <pre>${JSON.stringify(data, null, 2)}</pre>
-                `;
-            } else {
-                // System message
-                notificationElement.innerHTML = `
-                    <p>${notification.message}</p>
-                    <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
-                `;
+                // Emit a custom event to yourself
+                // Note: This will only work if your server is set up to reflect events back to the sender
+                socket.emit('test_notification', testData);
+                log(`Sent test notification: ${JSON.stringify(testData)}`, 'info');
+            } catch (error) {
+                log(`Error sending test notification: ${error.message}`, 'error');
             }
-            
-            container.prepend(notificationElement);
         }
+        
+        // Event listeners
+        connectBtn.addEventListener('click', connectWebSocket);
+        disconnectBtn.addEventListener('click', disconnectWebSocket);
+        testNotificationBtn.addEventListener('click', testNotification);
     </script>
 </body>
 </html>
